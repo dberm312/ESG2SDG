@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Feb 10 16:07:45 2020
+Created on Thu Feb 13 12:17:40 2020
 
 @author: Berma
 """
@@ -13,81 +13,79 @@ from SDG_Scraping import SDGs
 import pandas as pd
 import numpy as np
 import gensim.downloader as api
+from gensim.models import Word2Vec
 from sklearn.metrics.pairwise import cosine_similarity as cos_sim
 #%%
-S = SnP_reader()
-texts = S.Sector2Text('Real Estate')
-#text =''.join(texts)
-text_list = nltk.tokenize.sent_tokenize(''.join(texts))
-wv = api.load('word2vec-google-news-300') # https://radimrehurek.com/gensim/auto_examples/tutorials/run_word2vec.html#sphx-glr-auto-examples-tutorials-run-word2vec-py
+snp = SnP_reader()
+sdg = SDGs()
+text = snp.lst2Text(['msft','aapl','amzn','fb','goog'])
+text = [i+' ' for i in text]
+text = ''.join(text)
+text = text.replace('\n',' ').replace('\xa0', ' ')
+print('read text')
+text_list=nltk.tokenize.sent_tokenize(text)
+print('text_tokenized')
+del(text)
 #%%
-vectorizer = TfidfVectorizer()
-X = vectorizer.fit_transform(text_list)
-df = pd.DataFrame(data = vectorizer.vocabulary_.values(),index = vectorizer.vocabulary_.keys(),columns = ['count'])
-df1 = pd.DataFrame(data = np.ones(len(wv.vocab)),index = wv.vocab.keys())
-df2 = df.join(df1,how = 'inner')
-df2['word'] = df2.index
-df2['vec']=df2['word'].apply(lambda x:wv[x])
-dfwv = df2[['word','vec']]
-del(df,df1,df2,wv,text_list)
+snp_vectorizor = TfidfVectorizer()
+snp_vec = snp_vectorizor.fit_transform(text_list)
+snp_vec = pd.DataFrame(
+    data = snp_vec.todense(),
+    columns = snp_vectorizor.get_feature_names()).T
+
+sdg_vectorizor = TfidfVectorizer()
+sdg_vec = sdg_vectorizor.fit_transform(sdg.SDGs.values())
+sdg_vec = pd.DataFrame(
+    data = sdg_vec.todense(),
+    columns = sdg_vectorizor.get_feature_names(),
+    index = sdg.SDGs.keys()).T
+print('vectorized')
 #%%
-text_vec = pd.DataFrame(
-    data= X.T.todense(),
-    index = vectorizer.get_feature_names())
-dfall = dfwv.join(text_vec,how='inner')
-del(text_vec,dfwv,X)
-#print(vectorizer.get_feature_names())
+model = Word2Vec(api.load("text8"))#.wv
+wv = model.wv
+del(model)
+print('wv model loaded')
+
+sdg_vec = sdg_vec[sdg_vec.index.isin(wv.vocab.keys())]
+snp_vec = snp_vec[snp_vec.index.isin(wv.vocab.keys())]
+
+sdg_vec['vec'] = [wv[i] for i in sdg_vec.index]
+snp_vec['vec'] = [wv[i] for i in snp_vec.index]
+print('final vector')
+del(wv)
 #%%
-dfsdg = pd.DataFrame(
-    data = vectorizer.transform(SDGs().SDGs.values()).T.todense(),
-    index = vectorizer.get_feature_names(),
-    columns = list(SDGs().SDGs.keys()))
+snp_out = []
+for i in snp_vec.columns[:-1]:
+    snp_out.append(np.array([np.array(i) for i in (snp_vec[i]*snp_vec['vec'])]).sum(axis=0))
+    if(i%np.floor(len(snp_vec.columns)/100)==0):
+        print(np.round(i/len(snp_vec.columns),2))
+snp_out = np.array(snp_out)
 
-dfall = dfall.join(dfsdg, how = 'left')
-del(dfsdg)
+sdg_out = []
+for i in sdg_vec.columns[:-1]:
+    sdg_out.append(np.array([np.array(i) for i in (sdg_vec[i]*sdg_vec['vec'])]).sum(axis=0))
+del(i,snp,snp_vec,snp_vectorizor,sdg,sdg_vectorizor)
+sdg_out = np.array(sdg_out)
 
+Report_sim_table = pd.DataFrame(
+    data = cos_sim(snp_out),
+    columns = snp_vec.columns[:-1],
+    index = snp_vec.columns[:-1])
+#hold = (Report_sim_table<0.75).mean()<0.98
+hold = ((Report_sim_table<0.80).mean()>0.9)
+
+Report2sdg_sim_table = pd.DataFrame(
+    data = cos_sim(snp_out,sdg_out),
+    columns = sdg_vec.columns[:-1],
+    index = snp_vec.columns[:-1])
+print(Report2sdg_sim_table.stack().sort_values(ascending=False).head(10))
+Report2sdg_sim_table[hold]
 #%%
-dfall = dfall.drop(columns = ['word'])
-Vec = pd.DataFrame(dfall['vec'])
-dfall = dfall.drop(columns = ['vec'])
-loc = list(dfall).index('1.1')
-SnP_Txt = dfall[dfall.columns[:loc]]
-SDG_Txt = dfall.drop(columns = dfall.columns[:loc])
-del(dfall,loc)
-
-#%%SnP Vectorization
-out = []
-for i in SnP_Txt.columns:
-    out.append(np.array(SnP_Txt[i]*Vec['vec']).T.sum())
-    if(i%np.floor(len(SnP_Txt.columns)/100)==0):
-        print(np.round(i/len(SnP_Txt.columns,2))
-SnP_Vec = pd.DataFrame(out,index = SnP_Txt.columns)
-del(out,i)
-
-#%%SDG sentance Vectorization
-out = []
-for i in SDG_Txt.columns:
-    out.append(np.array(SDG_Txt[i]*Vec['vec']).T.sum())
-SDG_Vec = pd.DataFrame(out,index = SDG_Txt.columns)
-del(i,out)
-SDG_sim = pd.DataFrame(
-    data = cos_sim(SDG_Vec.values),
-    index = SDG_Txt.columns,
-    columns = SDG_Txt.columns).stack()
-SDG_sim=SDG_sim[SDG_sim<0.999999].drop_duplicates().sort_values(ascending=False)
-pd.DataFrame(SDG_sim.head(100),columns = ['sim']).to_csv('SDG_sim.csv')
-
-#%%
-sim = cos_sim(SDG_Vec.values,SnP_Vec.values)
-sim = pd.DataFrame(
-    data = sim,
-    index = SDG_Txt.columns).T
-
-#%%
-hold1=[]
-for i in SDG_Txt.columns:
-    hold = sim[i].sort_values(ascending=False).head(3).mean()
-    hold1.append(hold)
-hold2 = pd.DataFrame(data = hold1,index = SDG_Txt.columns,columns = ['cat']).sort_values('cat',ascending=False)
-print(hold2.head(25))
-hold2.to_csv('Real_Estate.csv')
+out = pd.DataFrame(
+    data = np.zeros((5,5)),
+    index = [0.75,0.8,0.85,0.9,0.95],
+    columns = [0.75,0.8,0.85,0.9,0.95])
+for i in out.columns:
+    for j in out.index:
+        out.loc[i][j] = ((Report_sim_table<i).mean()>j).mean()
+print(out)
